@@ -166,6 +166,7 @@ fn generate_wxs_file(wxs_path: &Path, settings: &Settings) -> crate::Result<()> 
             file: Some(File {
                 id: Some(exe_id.clone()),
                 source: binary_path.to_string(),
+                name: Some(format!("{}.exe", settings.windows_executable_name())),
                 key_path: Some("yes".to_string()),
             }),
             prog_id,
@@ -780,6 +781,12 @@ struct File {
     id: Option<String>,
     #[serde(rename = "@Source")]
     source: String,
+    // dtb-ke-patches: WiX defaults the *installed* file name to `@Source`'s own basename when this
+    // is absent — which was always the raw Cargo binary name, with no way to install it under a
+    // different one (see `Settings::windows_executable_name`'s doc comment). Only the main
+    // executable's `File` sets this; every other component (DLLs, resources) keeps its own name.
+    #[serde(rename = "@Name", skip_serializing_if = "Option::is_none")]
+    name: Option<String>,
     #[serde(rename = "@KeyPath", skip_serializing_if = "Option::is_none")]
     key_path: Option<String>,
 }

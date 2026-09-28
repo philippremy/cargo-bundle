@@ -57,7 +57,7 @@ pub fn bundle_project(settings: &Settings) -> crate::Result<Vec<PathBuf>> {
 
     // Generate data files.
     let data_dir = package_dir.join("data");
-    let binary_dest = data_dir.join("usr/bin").join(settings.binary_name());
+    let binary_dest = data_dir.join("usr/bin").join(settings.linux_executable_name());
     common::copy_file(settings.binary_path(), &binary_dest)
         .with_context(|| "Failed to copy binary file")?;
     transfer_resource_files(settings, &data_dir)

@@ -101,7 +101,10 @@ impl<'a> AppDirectory<'a> {
     }
 
     fn binary_relative_path(&self) -> PathBuf {
-        PathBuf::from("usr/bin").join(self.settings.binary_name())
+        // dtb-ke-patches: the actually-installed executable follows `linux_executable_name()`, not
+        // necessarily the raw Cargo binary name — see `Settings::linux_executable_name`'s doc
+        // comment. `AppRun` (below) symlinks to this same path, so it follows along automatically.
+        PathBuf::from("usr/bin").join(self.settings.linux_executable_name())
     }
 
     fn setup_entry_points(&self) -> crate::Result<()> {
@@ -146,7 +149,10 @@ impl<'a> AppDirectory<'a> {
     }
 
     fn generate_directory_icon_and_root_icon(&self) -> crate::Result<()> {
-        let binary_name = self.settings.binary_name();
+        // dtb-ke-patches: matches `icons.rs::generate_icon_files`, which now also installs the
+        // hicolor icon under `linux_executable_name()` — see `find_largest_hicolor_png` below, which
+        // must look up the same name or it finds nothing.
+        let binary_name = self.settings.linux_executable_name();
 
         for icon_path in self.settings.icon_files() {
             let icon_path = icon_path?;

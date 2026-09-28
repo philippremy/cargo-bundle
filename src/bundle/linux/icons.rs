@@ -87,7 +87,10 @@ fn install_other_icon(
 /// Generate the icon files and store them under the `data_dir`.
 pub fn generate_icon_files(settings: &Settings, data_dir: &Path) -> crate::Result<()> {
     let base_directory = data_dir.join("usr/share/icons/hicolor");
-    let binary_name = settings.binary_name();
+    // dtb-ke-patches: matches desktop.rs's `Icon=` key, which now also follows
+    // `linux_executable_name()` rather than the raw Cargo binary name — see
+    // `Settings::linux_executable_name`'s doc comment.
+    let binary_name = settings.linux_executable_name();
     let mut seen_sizes = BTreeSet::new();
 
     for icon_path in settings.icon_files() {

@@ -171,6 +171,11 @@ struct LinuxSettings {
     // type mapping) with the system in the first place, and `resources` can't place a file at an
     // arbitrary path (always under `usr/lib/<binary name>/`).
     mime_info_path: Option<String>,
+    // dtb-ke-patches: the installed executable's file name (`usr/bin/<this>`, the AppImage's `AppRun`
+    // symlink target, the `.desktop` file's `Exec=` line) — otherwise always `binary_name()`, the raw
+    // Cargo `[[bin]] name`, with no way to ship it under a different (still ASCII, still
+    // shell-friendly) name. See `Settings::linux_executable_name`'s doc comment.
+    executable_name: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, serde::Deserialize)]
@@ -198,6 +203,9 @@ struct OsxSettings {
     // `Settings::osx_signing_entitlements`'s doc comment.
     entitlements: Option<PathBuf>,
     hardened_runtime: Option<bool>,
+    // dtb-ke-patches: the `Contents/MacOS/` executable's file name — otherwise always `binary_name()`,
+    // the raw Cargo `[[bin]] name`. See `Settings::osx_executable_name`'s doc comment.
+    executable_name: Option<String>,
 }
 
 /// dtb-ke-patches: `wxsmsi_bundle.rs` (the WiX-based `.msi` backend) had no file-association support
@@ -218,6 +226,10 @@ pub struct WindowsFileAssociation {
 #[serde(deny_unknown_fields)]
 struct WindowsSettings {
     file_association: Option<WindowsFileAssociation>,
+    // dtb-ke-patches: the installed `.exe`'s file name (sans extension — `.exe` is always appended),
+    // otherwise always `binary_name()`, the raw Cargo `[[bin]] name`. See
+    // `Settings::windows_executable_name`'s doc comment.
+    executable_name: Option<String>,
 }
 
 /// dtb-ke-patches: `ios_bundle.rs` had none of the capabilities `osx_bundle.rs` has — no
@@ -235,6 +247,9 @@ struct IosSettings {
     // split. Unlike macOS, this app currently ships no iOS entitlements at all (leave both unset).
     entitlements: Option<PathBuf>,
     hardened_runtime: Option<bool>,
+    // dtb-ke-patches: the bundle root executable's file name — otherwise always `binary_name()`, the
+    // raw Cargo `[[bin]] name`. See `Settings::ios_executable_name`'s doc comment.
+    executable_name: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, serde::Deserialize)]
@@ -792,6 +807,18 @@ impl Settings {
         }
     }
 
+    /// dtb-ke-patches: the installed executable's file name (`usr/bin/<this>`, the AppImage's
+    /// `AppRun` symlink target, the `.desktop` file's `Exec=` line) — see `LinuxSettings::
+    /// executable_name`'s doc comment. Falls back to `binary_name()` (the raw Cargo `[[bin]] name`)
+    /// when unset, matching the previous behavior.
+    pub fn linux_executable_name(&self) -> &str {
+        self.bundle_settings
+            .linux
+            .as_ref()
+            .and_then(|linux| linux.executable_name.as_deref())
+            .unwrap_or_else(|| self.binary_name())
+    }
+
     /// dtb-ke-patches: a shared-mime-info XML file to register in the .deb (see
     /// `LinuxSettings::mime_info_path`'s doc comment). Required for a custom MIME type
     /// (`mime_types`/the `.desktop` file's `MimeType=` line) to actually resolve on a real system —
@@ -1003,6 +1030,47 @@ impl Settings {
             .as_ref()
             .and_then(|ios| ios.display_name.as_deref())
             .unwrap_or_else(|| self.bundle_name())
+    }
+
+    /// dtb-ke-patches: the `Contents/MacOS/` executable's file name (`osx_bundle.rs`'s
+    /// `copy_binary_to_bundle`/`add_rpath`, and `CFBundleExecutable`) — see `OsxSettings::
+    /// executable_name`'s doc comment. Falls back to `binary_name()` (the raw Cargo `[[bin]] name`)
+    /// when unset, matching the previous behavior. Distinct from `bundle_name()`, the `.app` folder's
+    /// own (possibly non-ASCII, spaced) name, which is unaffected either way.
+    pub fn osx_executable_name(&self) -> &str {
+        self.bundle_settings
+            .osx
+            .as_ref()
+            .and_then(|osx| osx.executable_name.as_deref())
+            .unwrap_or_else(|| self.binary_name())
+    }
+
+    /// dtb-ke-patches: the iOS half of `osx_executable_name` — see its doc comment. iOS bundles have
+    /// no `Contents/MacOS/` subdirectory, the executable sits at the bundle root directly, but the
+    /// naming concern (and the `CFBundleExecutable` wiring) is identical.
+    pub fn ios_executable_name(&self) -> &str {
+        self.bundle_settings
+            .ios
+            .as_ref()
+            .and_then(|ios| ios.executable_name.as_deref())
+            .unwrap_or_else(|| self.binary_name())
+    }
+
+    /// dtb-ke-patches: the installed `.exe`'s file name, *without* the `.exe` extension — callers
+    /// append it themselves (`wxsmsi_bundle.rs`'s `File`/`ProgId` wiring) — see
+    /// `WindowsSettings::executable_name`'s doc comment. Falls back to `binary_name()` stripped of
+    /// any extension it already carries (it always has `.exe` appended for a Windows package type —
+    /// see `Settings::new`) when unset, matching the previous behavior.
+    pub fn windows_executable_name(&self) -> &str {
+        self.bundle_settings
+            .windows
+            .as_ref()
+            .and_then(|windows| windows.executable_name.as_deref())
+            .unwrap_or_else(|| {
+                self.binary_name()
+                    .strip_suffix(".exe")
+                    .unwrap_or_else(|| self.binary_name())
+            })
     }
 
     /// dtb-ke-patches: iOS's own `info_plist_exts` (see `IosSettings`'s doc comment) — a separate list

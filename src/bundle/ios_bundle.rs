@@ -70,7 +70,7 @@ pub fn bundle_project(settings: &Settings) -> crate::Result<Vec<PathBuf>> {
         generate_icon_files(&bundle_dir, settings).with_context(|| "Failed to create app icons")?;
     generate_info_plist(&bundle_dir, settings, &icon_filenames, is_simulator)
         .with_context(|| "Failed to create Info.plist")?;
-    let bin_path = bundle_dir.join(settings.binary_name());
+    let bin_path = bundle_dir.join(settings.ios_executable_name());
     common::copy_file(settings.binary_path(), &bin_path)
         .with_context(|| format!("Failed to copy binary from {:?}", settings.binary_path()))?;
     signing::sign_apple_path(
@@ -241,7 +241,7 @@ fn generate_info_plist(
     write!(
         file,
         "  <key>CFBundleExecutable</key>\n  <string>{}</string>\n",
-        settings.binary_name()
+        settings.ios_executable_name()
     )?;
     write!(
         file,

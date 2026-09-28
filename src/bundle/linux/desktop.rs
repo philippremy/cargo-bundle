@@ -149,8 +149,11 @@ pub fn generate_desktop_file(
     data_dir: &Path,
     options: &DesktopFileOptions,
 ) -> crate::Result<()> {
-    let bin_name = settings.binary_name();
-    let desktop_file_name = format!("{bin_name}.desktop");
+    // dtb-ke-patches: the *file name* stays tied to the raw Cargo binary name (an internal
+    // desktop-integration id, not user-facing) — only the `Exec=`/`Icon=` keys below need to follow
+    // `linux_executable_name()`, since those must resolve to the actually-installed binary/icon.
+    let desktop_file_name = format!("{}.desktop", settings.binary_name());
+    let bin_name = settings.linux_executable_name();
     let desktop_file_path = data_dir
         .join("usr/share/applications")
         .join(desktop_file_name);

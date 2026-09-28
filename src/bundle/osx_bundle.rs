@@ -152,7 +152,7 @@ fn copy_binary_to_bundle(bundle_directory: &Path, settings: &Settings) -> crate:
     let dest_dir = bundle_directory.join("MacOS");
     common::copy_file(
         settings.binary_path(),
-        &dest_dir.join(settings.binary_name()),
+        &dest_dir.join(settings.osx_executable_name()),
     )
 }
 // dtb-ke-patches: moved to `common.rs` (as `PlistEntryFormatter`) so `ios_bundle.rs` can splice
@@ -162,7 +162,9 @@ use super::common::PlistEntryFormatter;
 const FRAMEWORKS_RPATH: &str = "@executable_path/../Frameworks";
 
 fn add_rpath(bundle_directory: &Path, settings: &Settings) -> crate::Result<()> {
-    let bin = bundle_directory.join("MacOS").join(settings.binary_name());
+    let bin = bundle_directory
+        .join("MacOS")
+        .join(settings.osx_executable_name());
 
     let dyinfo = DylibInfo::inspect(&bin)?;
 
@@ -215,7 +217,7 @@ fn create_info_plist(
     write!(
         file,
         "  <key>CFBundleExecutable</key>\n  <string>{}</string>\n",
-        settings.binary_name()
+        settings.osx_executable_name()
     )?;
     if let Some(path) = bundle_icon_file {
         write!(
