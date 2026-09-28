@@ -59,12 +59,29 @@ pub fn bundle_project(settings: &Settings) -> crate::Result<Vec<PathBuf>> {
     Ok(vec![msi_path])
 }
 
+// dtb-ke-patches: upstream never set an MSBuild `Platform` property at all, so `dotnet build` fell
+// back to whatever `WixToolset.Sdk` defaults to (x86) regardless of the actual binary's architecture —
+// there was no way to produce a real x64 or arm64 `.msi`. Maps `Settings::binary_arch()` (a Rust
+// `target_arch`-style string: "x86_64", "aarch64", "x86") to the WiX/MSBuild platform moniker it
+// expects ("x64", "arm64", "x86").
+fn wix_platform(arch: &str) -> &'static str {
+    match arch {
+        "x86_64" => "x64",
+        "aarch64" | "arm64" => "arm64",
+        _ => "x86",
+    }
+}
+
 fn generate_wixproj_file(settings: &Settings) -> String {
     let output_name = sanitize_identifier(settings.bundle_name(), '-', true);
+    let platform = wix_platform(settings.binary_arch()).to_string();
 
     let wix_project = WixProject {
         sdk: "WixToolset.Sdk/6.0.2".to_string(),
-        property_group: PropertyGroup { output_name },
+        property_group: PropertyGroup {
+            output_name,
+            platform,
+        },
         item_group: ItemGroup {
             package_reference: PackageReference {
                 include: "WixToolset.UI.wixext".to_string(),
@@ -701,6 +718,10 @@ struct WixProject {
 struct PropertyGroup {
     #[serde(rename = "OutputName")]
     output_name: String,
+    // dtb-ke-patches: see `wix_platform`'s doc comment — without this, every build produced an x86
+    // MSI (or possibly failed outright) regardless of the actual target architecture.
+    #[serde(rename = "Platform")]
+    platform: String,
 }
 
 #[derive(Serialize)]
