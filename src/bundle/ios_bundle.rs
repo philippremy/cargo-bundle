@@ -57,9 +57,18 @@ pub fn bundle_project(settings: &Settings) -> crate::Result<Vec<PathBuf>> {
             .with_context(|| format!("Failed to copy additional resource {src:?}"))?;
     }
 
+    // `-sim`-suffixed and bare `x86_64` triples are always simulator triples (Apple never shipped a
+    // 32/64-bit Intel device); everything else is a real device build. Shared between the Info.plist
+    // fields below (which need it regardless) and the `.ipa` step at the end (which doesn't apply to
+    // a simulator build at all — `simctl install` takes the `.app` directly, never a `.ipa`).
+    let is_simulator = settings
+        .target_triples()
+        .next()
+        .is_some_and(|triple| triple.ends_with("-sim") || triple.starts_with("x86_64"));
+
     let icon_filenames =
         generate_icon_files(&bundle_dir, settings).with_context(|| "Failed to create app icons")?;
-    generate_info_plist(&bundle_dir, settings, &icon_filenames)
+    generate_info_plist(&bundle_dir, settings, &icon_filenames, is_simulator)
         .with_context(|| "Failed to create Info.plist")?;
     let bin_path = bundle_dir.join(settings.binary_name());
     common::copy_file(settings.binary_path(), &bin_path)
@@ -70,7 +79,60 @@ pub fn bundle_project(settings: &Settings) -> crate::Result<Vec<PathBuf>> {
         settings.ios_signing_entitlements(),
         settings.ios_signing_hardened_runtime(),
     )?;
-    Ok(vec![bundle_dir])
+
+    let mut outputs = vec![bundle_dir.clone()];
+    if !is_simulator {
+        outputs.push(write_ipa(&bundle_dir, &app_bundle_name)?);
+    }
+    Ok(outputs)
+}
+
+/// dtb-ke-patches: a `.ipa` is nothing more than a zip with the `.app` nested one level down, under
+/// a literal `Payload/` directory — that's the entire format (see Apple's own archive layout docs).
+/// Device installs (Xcode's Devices window, `ideviceinstaller`, TestFlight) all expect this shape;
+/// `simctl install` (the Simulator) takes the `.app` directly and has no use for a `.ipa` at all.
+fn write_ipa(bundle_dir: &Path, app_bundle_name: &str) -> crate::Result<PathBuf> {
+    let ipa_path = bundle_dir.with_extension("ipa");
+    let file = common::create_file(&ipa_path)
+        .with_context(|| format!("Failed to create {ipa_path:?}"))?;
+    let mut writer = zip::ZipWriter::new(file);
+    let options =
+        zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+
+    let mut entries: Vec<PathBuf> = walkdir::WalkDir::new(bundle_dir)
+        .into_iter()
+        .filter_map(|entry| entry.ok())
+        .map(|entry| entry.into_path())
+        .collect();
+    entries.sort();
+    for entry in entries {
+        let relative = entry
+            .strip_prefix(bundle_dir)
+            .expect("walked path is always under bundle_dir");
+        let zip_path = format!(
+            "Payload/{app_bundle_name}/{}",
+            relative.to_string_lossy().replace('\\', "/")
+        );
+        if entry.is_dir() {
+            if !relative.as_os_str().is_empty() {
+                writer
+                    .add_directory(format!("{zip_path}/"), options)
+                    .with_context(|| format!("Failed to add {zip_path} to {ipa_path:?}"))?;
+            }
+            continue;
+        }
+        writer
+            .start_file(&zip_path, options)
+            .with_context(|| format!("Failed to add {zip_path} to {ipa_path:?}"))?;
+        let bytes = fs::read(&entry).with_context(|| format!("Failed to read {entry:?}"))?;
+        writer
+            .write_all(&bytes)
+            .with_context(|| format!("Failed to write {zip_path} into {ipa_path:?}"))?;
+    }
+    writer
+        .finish()
+        .with_context(|| format!("Failed to finish {ipa_path:?}"))?;
+    Ok(ipa_path)
 }
 
 /// Generate the icon files and store them under the `bundle_dir`.
@@ -146,6 +208,7 @@ fn generate_info_plist(
     bundle_dir: &Path,
     settings: &Settings,
     icon_filenames: &Vec<String>,
+    is_simulator: bool,
 ) -> crate::Result<()> {
     let file = &mut common::create_file(&bundle_dir.join("Info.plist"))?;
     write!(
@@ -208,12 +271,7 @@ fn generate_info_plist(
     )?;
     // dtb-ke-patches: also missing upstream — real values, not a placeholder, since Xcode/Apple's
     // review tooling checks these against the actual SDK/target the binary was built for.
-    // `-sim`-suffixed and bare `x86_64` triples are always simulator triples (Apple never shipped a
-    // 32/64-bit Intel device); everything else here is a real device build.
-    let is_simulator = settings
-        .target_triples()
-        .next()
-        .is_some_and(|triple| triple.ends_with("-sim") || triple.starts_with("x86_64"));
+    // `is_simulator` (see bundle_project) is shared with the `.ipa` decision below.
     let (dt_platform_name, supported_platform) = if is_simulator {
         ("iphonesimulator", "iphonesimulator")
     } else {

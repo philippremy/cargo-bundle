@@ -53,8 +53,39 @@ pub fn sign_apple_path(
         None => None,
     };
 
+    // dtb-ke-patches: a device build (`--sign` + `--provisioning-profile`, mutually required by
+    // clap) takes priority over the p12 path above — it needs a real Apple-issued identity, which a
+    // p12 in this project's Cargo.toml metadata was never going to be. The keychain-backed private
+    // key (`KeychainCertificate`, below) implements the same `PrivateKey` trait a parsed p12 does, so
+    // it plugs into `set_signing_key` identically; only *how* the identity is found differs.
+    let keychain_identity = match settings.sign_identity() {
+        #[cfg(target_os = "macos")]
+        Some(identity) => Some(find_keychain_identity(identity)?),
+        #[cfg(not(target_os = "macos"))]
+        Some(_) => anyhow::bail!("--sign (keychain-based code signing) is only available on macOS"),
+        None => None,
+    };
+
+    // The profile's own `Entitlements` are authoritative for a device build — Apple's installer
+    // refuses a mismatch between what's signed and what the profile grants, so this overrides
+    // whatever `entitlements` (the OSX/iOS metadata's own entitlements file) was passed in.
+    let mut profile_entitlements_xml = None;
+    if let Some(profile_path) = settings.provisioning_profile() {
+        let profile_bytes = std::fs::read(profile_path).with_context(|| {
+            format!("Failed to read provisioning profile {profile_path:?}")
+        })?;
+        std::fs::write(path.join("embedded.mobileprovision"), &profile_bytes).with_context(
+            || format!("Failed to embed provisioning profile into {path:?}"),
+        )?;
+        profile_entitlements_xml = Some(entitlements_xml_from_profile(&profile_bytes)?);
+    }
+
     let mut signing_settings = SigningSettings::default();
-    if let Some((certificate, private_key)) = &p12_identity {
+    if let Some((certificate, private_key)) = &keychain_identity {
+        signing_settings.set_signing_key(private_key.as_key_info_signer(), certificate.clone());
+        signing_settings.chain_apple_certificates();
+        signing_settings.set_team_id_from_signing_certificate();
+    } else if let Some((certificate, private_key)) = &p12_identity {
         signing_settings.set_signing_key(private_key.as_key_info_signer(), certificate.clone());
         signing_settings.chain_apple_certificates();
         signing_settings.set_team_id_from_signing_certificate();
@@ -64,7 +95,11 @@ pub fn sign_apple_path(
                 .map_err(|error| anyhow::anyhow!("Invalid Apple signing timestamp URL: {error}"))?;
         }
     }
-    if let Some(entitlements_path) = entitlements {
+    if let Some(entitlements_xml) = profile_entitlements_xml {
+        signing_settings
+            .set_entitlements_xml(SettingsScope::Main, entitlements_xml)
+            .map_err(|error| anyhow::anyhow!("Invalid provisioning-profile entitlements: {error}"))?;
+    } else if let Some(entitlements_path) = entitlements {
         let entitlements_xml = std::fs::read_to_string(entitlements_path).with_context(|| {
             format!("Failed to read Apple signing entitlements {entitlements_path:?}")
         })?;
@@ -79,6 +114,66 @@ pub fn sign_apple_path(
     UnifiedSigner::new(signing_settings)
         .sign_path_in_place(path)
         .map_err(|error| anyhow::anyhow!("Apple code signing failed: {error}"))
+}
+
+/// dtb-ke-patches: finds a code-signing certificate + its keychain-resident private key by
+/// (sub)string match against the certificate's subject common name — the same identity string
+/// `codesign --sign <identity>` and `security find-identity -v -p codesigning` show. The private key
+/// never leaves the keychain/Secure Enclave: signing later goes through `SecKeyCreateSignature` via
+/// `KeychainCertificate`'s `Signer`/`PrivateKey` impls, exactly like a real `codesign` invocation.
+#[cfg(target_os = "macos")]
+fn find_keychain_identity(
+    identity: &str,
+) -> crate::Result<(
+    x509_certificate::CapturedX509Certificate,
+    apple_codesign::KeychainCertificate,
+)> {
+    use apple_codesign::{KeychainDomain, keychain_find_code_signing_certificates};
+
+    let candidates = keychain_find_code_signing_certificates(KeychainDomain::User, None)
+        .map_err(|error| anyhow::anyhow!("searching the keychain for {identity:?}: {error}"))?;
+    let found = candidates
+        .into_iter()
+        .find(|cert| {
+            cert.as_captured_x509_certificate()
+                .subject_common_name()
+                .is_some_and(|cn| cn.contains(identity))
+        })
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "no code-signing certificate in the keychain matches {identity:?} — check `security \
+                 find-identity -v -p codesigning`"
+            )
+        })?;
+    let certificate = found.as_captured_x509_certificate();
+    Ok((certificate, found))
+}
+
+/// dtb-ke-patches: a `.mobileprovision` is a CMS/PKCS#7 `SignedData` structure (Apple-signed) whose
+/// encapsulated content is a plain plist with, among other keys, `Entitlements` — the dict a device
+/// build must be signed with. Parsed in pure Rust (`cryptographic-message-syntax`, the same crate
+/// `apple-codesign` itself already depends on for notarization tickets) rather than shelling out to
+/// `security cms -D`, matching this fork's no-external-Apple-binaries approach throughout. Signature
+/// verification is skipped deliberately: the profile is Apple's own, freshly downloaded by whoever
+/// supplied it, not attacker-controlled input this process needs to distrust.
+fn entitlements_xml_from_profile(profile_bytes: &[u8]) -> crate::Result<String> {
+    let signed_data = cryptographic_message_syntax::SignedData::parse_ber(profile_bytes)
+        .map_err(|error| anyhow::anyhow!("Failed to parse provisioning profile: {error}"))?;
+    let plist_bytes = signed_data
+        .signed_content()
+        .ok_or_else(|| anyhow::anyhow!("Provisioning profile has no embedded content"))?;
+    let profile_plist = plist::Value::from_reader(std::io::Cursor::new(plist_bytes))
+        .map_err(|error| anyhow::anyhow!("Provisioning profile content is not a plist: {error}"))?;
+    let entitlements = profile_plist
+        .as_dictionary()
+        .and_then(|dict| dict.get("Entitlements"))
+        .ok_or_else(|| anyhow::anyhow!("Provisioning profile has no Entitlements dictionary"))?;
+    let mut xml = Vec::new();
+    entitlements
+        .to_writer_xml(&mut xml)
+        .map_err(|error| anyhow::anyhow!("Failed to serialize profile entitlements: {error}"))?;
+    String::from_utf8(xml)
+        .map_err(|error| anyhow::anyhow!("Profile entitlements are not valid UTF-8: {error}"))
 }
 
 /// Sign a Windows executable or installer when configured.

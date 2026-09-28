@@ -78,6 +78,21 @@ pub struct Cli {
     /// The name of the package to bundle. If not specified, the root package will be used.
     #[arg(short, long, value_name = "SPEC")]
     pub package: Option<String>,
+
+    /// dtb-ke-patches: iOS device signing. A code-signing identity already in the macOS keychain
+    /// (matched by a substring of its certificate's subject common name — the same string `codesign
+    /// --sign <identity>` and `security find-identity -v -p codesigning` use), as an alternative to
+    /// the `osx`/`ios` metadata's p12-file-based signing. Only consulted by the `ios` format; macOS
+    /// bundling is unaffected. Requires `--provisioning-profile` (a device build needs both).
+    #[arg(long, value_name = "IDENTITY", requires = "provisioning_profile")]
+    pub sign: Option<String>,
+
+    /// dtb-ke-patches: a `.mobileprovision` file to embed as `embedded.mobileprovision` (device
+    /// installs only — the Simulator needs neither this nor `--sign`). Its own `Entitlements` become
+    /// the signing entitlements for this build, taking priority over `ios.entitlements` in metadata,
+    /// since a device install is refused unless they match the profile exactly.
+    #[arg(long, value_name = "PATH", requires = "sign")]
+    pub provisioning_profile: Option<PathBuf>,
 }
 
 /// Runs `cargo build` to make sure the binary file is up-to-date.

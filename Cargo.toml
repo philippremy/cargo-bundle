@@ -92,6 +92,16 @@ walkdir = "2.5.0"
 alias_record = "0.3.0"
 appimage = { package = "appimage-rs", version = "0.1.0" }
 apple-codesign = { version = "0.29.0", default-features = false }
+# dtb-ke-patches: parses a `.mobileprovision`'s CMS/PKCS#7 envelope for iOS device signing
+# (signing.rs) -- already resolved transitively via apple-codesign (its own notarization-ticket
+# parsing), pinned here at the same version so it's just reused, not a second copy.
+cryptographic-message-syntax = "0.27.0"
+# dtb-ke-patches: apple-codesign uses this internally for `CapturedX509Certificate` but doesn't
+# re-export the type itself -- named directly in signing.rs's keychain-lookup return type. Same
+# already-transitively-resolved version, not a second copy.
+x509-certificate = "0.24.0"
+# dtb-ke-patches: zips `Payload/<name>.app` into a `.ipa` for iOS device builds (ios_bundle.rs).
+zip = { version = "2.4.2", default-features = false, features = ["deflate"] }
 osslsigncode = { version = "0.1.2", optional = true }
 sigstore = { version = "0.14.0", default-features = false, features = [
     "bundle",

@@ -303,6 +303,10 @@ pub struct Settings {
     universal_input_binary_paths: Vec<PathBuf>,
     binary_name: String,
     bundle_settings: BundleSettings,
+    /// dtb-ke-patches: `--sign`/`--provisioning-profile` (iOS device signing) — see main.rs's `Cli`
+    /// doc comments. clap's `requires` ties them together, so either both are `Some` or both `None`.
+    sign_identity: Option<String>,
+    provisioning_profile: Option<PathBuf>,
 }
 
 /// Try to load `Cargo.toml` file in the specified directory
@@ -430,7 +434,19 @@ impl Settings {
             universal_input_binary_paths,
             binary_name,
             bundle_settings,
+            sign_identity: cli.sign.clone(),
+            provisioning_profile: cli.provisioning_profile.clone(),
         })
+    }
+
+    /// dtb-ke-patches: `--sign` — see main.rs's `Cli::sign` doc comment.
+    pub fn sign_identity(&self) -> Option<&str> {
+        self.sign_identity.as_deref()
+    }
+
+    /// dtb-ke-patches: `--provisioning-profile` — see main.rs's `Cli::provisioning_profile` doc comment.
+    pub fn provisioning_profile(&self) -> Option<&Path> {
+        self.provisioning_profile.as_deref()
     }
 
     pub fn manifest_path(&self) -> &Path {
