@@ -190,10 +190,53 @@ fn generate_info_plist(
         "  <key>CFBundleShortVersionString</key>\n  <string>{}</string>\n",
         settings.version_string()
     )?;
+    // dtb-ke-patches: was hardcoded "en_US" — this app's own convention is German everywhere else
+    // (see the workspace CLAUDE.md: "User-facing strings and domain vocabulary are German"), and the
+    // previous dtb-ke-bundle pipeline's iOS Info.plist already used "de" here.
     write!(
         file,
-        "  <key>CFBundleDevelopmentRegion</key>\n  <string>en_US</string>\n"
+        "  <key>CFBundleDevelopmentRegion</key>\n  <string>de</string>\n"
     )?;
+    // dtb-ke-patches: upstream wrote neither of these at all.
+    write!(
+        file,
+        "  <key>CFBundleInfoDictionaryVersion</key>\n  <string>6.0</string>\n"
+    )?;
+    write!(
+        file,
+        "  <key>CFBundlePackageType</key>\n  <string>APPL</string>\n"
+    )?;
+    // dtb-ke-patches: also missing upstream — real values, not a placeholder, since Xcode/Apple's
+    // review tooling checks these against the actual SDK/target the binary was built for.
+    // `-sim`-suffixed and bare `x86_64` triples are always simulator triples (Apple never shipped a
+    // 32/64-bit Intel device); everything else here is a real device build.
+    let is_simulator = settings
+        .target_triples()
+        .next()
+        .is_some_and(|triple| triple.ends_with("-sim") || triple.starts_with("x86_64"));
+    let (dt_platform_name, supported_platform) = if is_simulator {
+        ("iphonesimulator", "iphonesimulator")
+    } else {
+        ("iphoneos", "iphoneos")
+    };
+    write!(
+        file,
+        "  <key>CFBundleSupportedPlatforms</key>\n  <array>\n    <string>{supported_platform}</string>\n  </array>\n"
+    )?;
+    write!(
+        file,
+        "  <key>DTPlatformName</key>\n  <string>{dt_platform_name}</string>\n"
+    )?;
+    // dtb-ke-patches: reuses the same top-level `category` config osx_bundle.rs already reads (the
+    // category UTI strings are identical across macOS/iOS — `osx_application_category_type` is just a
+    // historical name), rather than leaving this unset on iOS specifically.
+    if let Some(category) = settings.app_category() {
+        write!(
+            file,
+            "  <key>LSApplicationCategoryType</key>\n  <string>{}</string>\n",
+            category.osx_application_category_type().format_plist_entry()
+        )?;
+    }
     write!(
         file,
         "  <key>UILaunchStoryboardName</key>\n  <string></string>\n"

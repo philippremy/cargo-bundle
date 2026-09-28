@@ -199,10 +199,13 @@ fn create_info_plist(
             <plist version=\"1.0\">\n\
             <dict>\n"
     )?;
+    // dtb-ke-patches: was hardcoded "English" — this app's own convention is German everywhere else
+    // (see the workspace CLAUDE.md: "User-facing strings and domain vocabulary are German"), and the
+    // previous dtb-ke-bundle pipeline's macOS Info.plist already used "de" here.
     write!(
         file,
         "  <key>CFBundleDevelopmentRegion</key>\n  \
-            <string>English</string>\n"
+            <string>de</string>\n"
     )?;
     write!(
         file,
