@@ -176,6 +176,11 @@ struct LinuxSettings {
     // Cargo `[[bin]] name`, with no way to ship it under a different (still ASCII, still
     // shell-friendly) name. See `Settings::linux_executable_name`'s doc comment.
     executable_name: Option<String>,
+    // dtb-ke-patches: a pre-generated hicolor icon tree (e.g. "assets/icons/generated/hicolor")
+    // whose `<size>x<size>/mimetypes/<name>.png` entries get copied verbatim into the bundle's own
+    // hicolor theme — see `Settings::linux_mime_icon_dir`'s doc comment for why `mime_types` alone
+    // isn't enough to get a document-type icon on screen.
+    mime_icon_dir: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, serde::Deserialize)]
@@ -829,6 +834,19 @@ impl Settings {
             .linux
             .as_ref()
             .and_then(|linux| linux.mime_info_path.as_deref())
+            .map(Path::new)
+    }
+
+    /// dtb-ke-patches: a pre-generated hicolor icon tree whose `mimetypes/` entries get installed
+    /// into the bundle (see `LinuxSettings::mime_icon_dir`'s doc comment). Without this, a MIME type
+    /// registered via `mime_types`/`linux_mime_info_path` opens with this app but shows a generic
+    /// file icon everywhere in the desktop environment — declaring a MIME type and giving it an icon
+    /// are two separate freedesktop.org mechanisms.
+    pub fn linux_mime_icon_dir(&self) -> Option<&Path> {
+        self.bundle_settings
+            .linux
+            .as_ref()
+            .and_then(|linux| linux.mime_icon_dir.as_deref())
             .map(Path::new)
     }
 

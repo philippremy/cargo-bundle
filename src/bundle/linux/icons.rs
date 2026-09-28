@@ -6,6 +6,7 @@ use std::collections::BTreeSet;
 use std::ffi::OsStr;
 use std::fs::File;
 use std::path::{Path, PathBuf};
+use walkdir::WalkDir;
 
 /// A rendered icon's pixel dimensions plus whether it is a `@2x` high-density
 /// variant. Used to install each distinct size only once.
@@ -107,6 +108,36 @@ pub fn generate_icon_files(settings: &Settings, data_dir: &Path) -> crate::Resul
             }
             _ => install_other_icon(&icon_path, &base_directory, binary_name, &mut seen_sizes)?,
         }
+    }
+    install_mime_type_icons(settings, data_dir)?;
+    Ok(())
+}
+
+/// dtb-ke-patches: copy the `mimetypes/` half of `linux.mime_icon_dir` (a pre-generated hicolor
+/// tree — see `Settings::linux_mime_icon_dir`'s doc comment) verbatim into the bundle's own hicolor
+/// theme, so file managers (Nautilus, Dolphin, Thunar, …) show this project's own document icon for
+/// a registered MIME type instead of falling back to a generic one. Every file already sits at the
+/// right `<size>x<size>/mimetypes/<name>.png` path — `scripts/icons.py` rendered it there — so this
+/// is a plain recursive copy, not another icon-decoding pass like `install_png_icon` above.
+/// Deliberately scoped to entries whose immediate parent directory is `mimetypes`: the same source
+/// tree also carries an `apps/` half, which is a currently-unused byproduct of that script — the app
+/// icon itself still comes from `icon` above, installed by `install_png_icon`/`install_other_icon`.
+fn install_mime_type_icons(settings: &Settings, data_dir: &Path) -> crate::Result<()> {
+    let Some(source_root) = settings.linux_mime_icon_dir() else {
+        return Ok(());
+    };
+    let dest_root = data_dir.join("usr/share/icons/hicolor");
+    for entry in WalkDir::new(source_root) {
+        let entry = entry?;
+        if !entry.file_type().is_file() {
+            continue;
+        }
+        let path = entry.path();
+        if path.parent().and_then(|parent| parent.file_name()) != Some(OsStr::new("mimetypes")) {
+            continue;
+        }
+        let rel = path.strip_prefix(source_root).unwrap();
+        common::copy_file(path, &dest_root.join(rel))?;
     }
     Ok(())
 }
