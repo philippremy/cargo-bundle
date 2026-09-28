@@ -113,6 +113,7 @@ fn generate_wxs_file(wxs_path: &Path, settings: &Settings) -> crate::Result<()> 
 
     // Generate dynamic executable ID from binary name
     let exe_id = sanitize_identifier(settings.binary_name(), '_', false);
+    let main_icon_id = "main_ico_id";
 
     // Generate license RTF file
     let license_rtf_path = settings.project_out_directory().join("License.rtf");
@@ -122,8 +123,43 @@ fn generate_wxs_file(wxs_path: &Path, settings: &Settings) -> crate::Result<()> 
     let mut installfolder_components = Vec::new();
     let mut component_refs = Vec::new();
 
+    // dtb-ke-patches: a distinct icon for the associated file type, if configured — otherwise the
+    // ProgId falls back to the main app icon (still set below regardless).
+    let doc_icon_id = "doc_ico_id";
+    let doc_icon = settings
+        .windows_file_association()
+        .and_then(|assoc| assoc.icon.as_deref())
+        .map(|path| Icon {
+            id: doc_icon_id.to_string(),
+            source_file: path.to_string_lossy().into_owned(),
+        });
+
     // Main executable component
     if let Some(binary_path) = settings.binary_path().to_str() {
+        // dtb-ke-patches: see `Settings::windows_file_association`'s doc comment — WiX's standard
+        // ProgId/Extension/Verb trio, registered against `HKCR` (this MSI already installs machine-
+        // wide, under ProgramFilesFolder). Lives on the main executable's own component since that
+        // already has a real `File/@KeyPath="yes"` to anchor it.
+        let prog_id = settings.windows_file_association().map(|assoc| ProgId {
+            id: assoc.prog_id.clone(),
+            description: assoc.description.clone(),
+            icon: Some(if doc_icon.is_some() {
+                doc_icon_id.to_string()
+            } else {
+                main_icon_id.to_string()
+            }),
+            extension: Extension {
+                id: assoc.extension.clone(),
+                content_type: assoc.content_type.clone(),
+                verb: Verb {
+                    id: "open".to_string(),
+                    command: "Open".to_string(),
+                    target_file: exe_id.clone(),
+                    argument: "\"%1\"".to_string(),
+                },
+            },
+        });
+
         let comp = Component {
             id: Some("MainExecutableComponent".to_string()),
             guid: Some("*".to_string()),
@@ -132,6 +168,7 @@ fn generate_wxs_file(wxs_path: &Path, settings: &Settings) -> crate::Result<()> 
                 source: binary_path.to_string(),
                 key_path: Some("yes".to_string()),
             }),
+            prog_id,
             ..Component::default()
         };
         installfolder_components.push(comp);
@@ -218,8 +255,6 @@ fn generate_wxs_file(wxs_path: &Path, settings: &Settings) -> crate::Result<()> 
         settings.bundle_name()
     );
     let package_id = sanitize_identifier(&package_id, '_', false);
-
-    let main_icon_id = "main_ico_id";
 
     let icon_path = get_icon_path(settings);
 
@@ -308,10 +343,14 @@ fn generate_wxs_file(wxs_path: &Path, settings: &Settings) -> crate::Result<()> 
                 id: "WixUILicenseRtf".to_string(),
                 value: license_rtf_path.to_str().unwrap_or("").to_string(),
             },
-            icon: Some(Icon {
-                id: main_icon_id.to_string(),
-                source_file: icon_path.to_str().unwrap_or("").to_string(),
-            }),
+            icons: {
+                let mut icons = vec![Icon {
+                    id: main_icon_id.to_string(),
+                    source_file: icon_path.to_str().unwrap_or("").to_string(),
+                }];
+                icons.extend(doc_icon);
+                icons
+            },
         },
         fragments: vec![
             Fragment {
@@ -365,6 +404,7 @@ fn generate_wxs_file(wxs_path: &Path, settings: &Settings) -> crate::Result<()> 
                                     on: "uninstall".to_string(),
                                 }),
                                 file: None,
+                                prog_id: None,
                             }],
                             directories: vec![],
                         }),
@@ -470,8 +510,11 @@ struct Package {
     ui: UI,
     #[serde(rename = "WixVariable")]
     wix_variable: WixVariable,
-    #[serde(rename = "Icon", skip_serializing_if = "Option::is_none")]
-    icon: Option<Icon>,
+    // dtb-ke-patches: was `Option<Icon>` — a distinct file-type icon (`ProgId/@Icon`) needs its own
+    // `<Icon>` element alongside the main app one, and WiX allows any number of `Icon` elements as
+    // long as each `@Id` is unique.
+    #[serde(rename = "Icon", skip_serializing_if = "Vec::is_empty")]
+    icons: Vec<Icon>,
 }
 
 #[derive(Serialize)]
@@ -578,6 +621,43 @@ struct Icon {
     source_file: String,
 }
 
+// dtb-ke-patches: WiX's standard file-association trio, nested inside the main executable's own
+// `Component` (it already has `File/@KeyPath="yes"`, so this needs no GUID/keypath of its own) — see
+// `Settings::windows_file_association`'s doc comment for why this didn't exist at all upstream.
+#[derive(Clone, Serialize)]
+struct ProgId {
+    #[serde(rename = "@Id")]
+    id: String,
+    #[serde(rename = "@Description")]
+    description: String,
+    #[serde(rename = "@Icon", skip_serializing_if = "Option::is_none")]
+    icon: Option<String>,
+    #[serde(rename = "Extension")]
+    extension: Extension,
+}
+
+#[derive(Clone, Serialize)]
+struct Extension {
+    #[serde(rename = "@Id")]
+    id: String,
+    #[serde(rename = "@ContentType", skip_serializing_if = "Option::is_none")]
+    content_type: Option<String>,
+    #[serde(rename = "Verb")]
+    verb: Verb,
+}
+
+#[derive(Clone, Serialize)]
+struct Verb {
+    #[serde(rename = "@Id")]
+    id: String,
+    #[serde(rename = "@Command")]
+    command: String,
+    #[serde(rename = "@TargetFile")]
+    target_file: String,
+    #[serde(rename = "@Argument")]
+    argument: String,
+}
+
 #[derive(Serialize)]
 struct Fragment {
     #[serde(rename = "StandardDirectory", skip_serializing_if = "Option::is_none")]
@@ -624,6 +704,8 @@ struct Component {
     remove_file: Option<RemoveFile>,
     #[serde(rename = "File", skip_serializing_if = "Option::is_none")]
     file: Option<File>,
+    #[serde(rename = "ProgId", skip_serializing_if = "Option::is_none")]
+    prog_id: Option<ProgId>,
 }
 
 #[derive(Clone, Serialize)]
@@ -836,44 +918,50 @@ fn find_default_license() -> Option<String> {
 }
 
 fn get_icon_path(settings: &Settings) -> PathBuf {
-    let package_dir = settings
-        .manifest_path()
-        .parent()
-        .unwrap_or_else(|| Path::new("."));
+    // dtb-ke-patches: this used to look at only `icon_files().next()` — the *first* entry in `icon =
+    // [...]`, whatever format it happened to be — and, on top of that, re-joined it (already resolved:
+    // `icon_files()`/`ResourcePaths` glob paths relative to the process's cwd, only ever yielding paths
+    // that already matched a real file) against `settings.manifest_path()`'s *parent*, the crate's own
+    // manifest directory rather than the cwd, which silently corrupted an already-correct path into
+    // one that never exists — so `full_path.exists()` always failed and this fell straight through to
+    // "use the executable itself as the icon" unconditionally, regardless of what `icon = [...]`
+    // actually listed.
+    //
+    // Fixed to (1) not re-resolve an already-resolved path, and (2) search the *whole* `icon = [...]`
+    // list in two passes — an already-`.ico`/`.exe`/`.dll` entry needs no conversion and wins outright
+    // over one earlier in the list that would; a `.icns`/`.svg` entry is skipped in the conversion pass
+    // since `image::open` (which `convert_to_ico` uses) can't decode either.
+    let icons: Vec<PathBuf> = settings
+        .icon_files()
+        .filter_map(Result::ok)
+        .filter(|path| path.exists())
+        .collect();
 
-    // Try to get the first icon file from BundleSettings.icon
-    if let Some(icon_result) = settings.icon_files().next()
-        && let Ok(icon_path) = icon_result
-    {
-        let full_path = package_dir.join(icon_path);
+    for path in &icons {
+        let extension = path
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .unwrap_or("")
+            .to_lowercase();
+        if matches!(extension.as_str(), "ico" | "exe" | "dll") {
+            return path.clone();
+        }
+    }
 
-        // Check if the icon file exists
-        if full_path.exists() {
-            let extension = full_path
-                .extension()
-                .and_then(|ext| ext.to_str())
-                .unwrap_or("")
-                .to_lowercase();
-
-            // WiX supports ICO, EXE, and DLL formats for icons
-            if matches!(extension.as_str(), "ico" | "exe" | "dll") {
-                return full_path;
-            }
-
-            let out_dir = settings.project_out_directory();
-
-            let file_stem = full_path
-                .file_stem()
-                .and_then(|s| s.to_str())
-                .unwrap_or("icon");
-
-            let ico_path = out_dir.join(format!("{file_stem}-generated.ico"));
-
-            if extension == "svg" {
-                // TODO: convert svg to appropriate format?
-            } else if convert_to_ico(&full_path, &ico_path).is_ok() {
-                return ico_path;
-            }
+    for path in &icons {
+        let extension = path
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .unwrap_or("")
+            .to_lowercase();
+        if matches!(extension.as_str(), "svg" | "icns") {
+            continue;
+        }
+        let out_dir = settings.project_out_directory();
+        let file_stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("icon");
+        let ico_path = out_dir.join(format!("{file_stem}-generated.ico"));
+        if convert_to_ico(path, &ico_path).is_ok() {
+            return ico_path;
         }
     }
 

@@ -160,6 +160,10 @@ struct LinuxSettings {
     // umlaut survives straight into the control file) — Debian policy restricts package names to
     // lowercase ASCII letters, digits, `+`, `-`, `.`. This overrides that derivation outright.
     package_name: Option<String>,
+    // dtb-ke-patches: the AppStream component id the AppImage's metainfo file gets named after
+    // (`usr/share/metainfo/<this>.appdata.xml`) — see `Settings::linux_appstream_id`'s doc comment for
+    // why `bundle_identifier()` alone isn't safe to use for this.
+    appstream_id: Option<String>,
     // dtb-ke-patches: a shared-mime-info XML file (`<mime-type>`/`<glob>`) copied into
     // `usr/share/mime/packages/<package name>.xml` in the .deb — see `Settings::linux_mime_info_path`'s
     // doc comment for why this is needed at all: `mime_types`/the .desktop file's own `MimeType=` line
@@ -186,6 +190,26 @@ struct OsxSettings {
     // (referenced by bare name from `CFBundleTypeIconFile`/`UTTypeIconFile` via `info_plist_exts`) at
     // the Resources root by basename. This copies each listed file there directly, no path preserved.
     additional_resources: Option<Vec<String>>,
+}
+
+/// dtb-ke-patches: `wxsmsi_bundle.rs` (the WiX-based `.msi` backend) had no file-association support
+/// at all — no `ProgId`/`Extension`/registry entries anywhere in the generated `.wxs`. This is the one
+/// piece of data that needs: the extension to claim, the `ProgId` string written to the registry, a
+/// user-facing type description (Explorer's "Type" column), and an optional distinct icon (falls back
+/// to the app's own icon when unset).
+#[derive(Clone, Debug, serde::Deserialize)]
+pub struct WindowsFileAssociation {
+    pub extension: String,
+    pub prog_id: String,
+    pub description: String,
+    pub icon: Option<PathBuf>,
+    pub content_type: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WindowsSettings {
+    file_association: Option<WindowsFileAssociation>,
 }
 
 #[derive(Clone, Debug, Default, serde::Deserialize)]
@@ -226,6 +250,9 @@ struct BundleSettings {
     windows_signing: Option<WindowsSigningSettings>,
     /// Optional keyless Sigstore configuration for Linux release artifacts.
     linux_signing: Option<LinuxSigningSettings>,
+    /// dtb-ke-patches: Windows-only packaging configuration (currently just file association — see
+    /// `WindowsFileAssociation`'s doc comment).
+    windows: Option<WindowsSettings>,
     // Bundles for other binaries/examples:
     bin: Option<HashMap<String, BundleSettings>>,
     example: Option<HashMap<String, BundleSettings>>,
@@ -705,6 +732,25 @@ impl Settings {
         }
     }
 
+    /// dtb-ke-patches: the AppStream component id (`app_dir.rs::copy_metainfo` names the destination
+    /// file `<this>.appdata.xml`, which AppStream requires to exactly match the `<id>` inside the
+    /// metainfo document itself) — upstream just used `bundle_identifier()` there directly, which is
+    /// whatever the app's real cross-platform identifier is and isn't guaranteed to be the ASCII
+    /// reverse-DNS string AppStream ids are conventionally required to be (ours, for one, carries a
+    /// non-ASCII character kept for an unrelated macOS reason — see `identifier`'s own doc comment).
+    /// Falls back to `bundle_identifier()` when unset, matching the previous behavior.
+    pub fn linux_appstream_id(&self) -> String {
+        match self
+            .bundle_settings
+            .linux
+            .as_ref()
+            .and_then(|linux| linux.appstream_id.as_deref())
+        {
+            Some(id) => id.to_owned(),
+            None => self.bundle_identifier().into_owned(),
+        }
+    }
+
     /// dtb-ke-patches: a shared-mime-info XML file to register in the .deb (see
     /// `LinuxSettings::mime_info_path`'s doc comment). Required for a custom MIME type
     /// (`mime_types`/the `.desktop` file's `MimeType=` line) to actually resolve on a real system —
@@ -882,6 +928,12 @@ impl Settings {
     }
 
     /// Keyless Sigstore configuration for Linux release artifacts.
+    /// dtb-ke-patches: the file type to associate with this app on Windows, if configured (see
+    /// `WindowsFileAssociation`'s doc comment).
+    pub fn windows_file_association(&self) -> Option<&WindowsFileAssociation> {
+        self.bundle_settings.windows.as_ref()?.file_association.as_ref()
+    }
+
     pub fn linux_signing(&self) -> Option<&LinuxSigningSettings> {
         self.bundle_settings.linux_signing.as_ref()
     }

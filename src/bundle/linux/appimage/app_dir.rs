@@ -88,8 +88,9 @@ impl<'a> AppDirectory<'a> {
         fs::create_dir_all(&dest_dir).with_context(|| {
             format!("Failed to create metainfo directory {}", dest_dir.display())
         })?;
+        // dtb-ke-patches: was `bundle_identifier()` — see `Settings::linux_appstream_id`'s doc comment.
         let destination =
-            dest_dir.join(format!("{}.appdata.xml", self.settings.bundle_identifier()));
+            dest_dir.join(format!("{}.appdata.xml", self.settings.linux_appstream_id()));
 
         let localizations = self.settings.linux_localizations();
         copy_metainfo_with_localizations(
