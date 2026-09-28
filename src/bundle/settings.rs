@@ -155,6 +155,18 @@ struct LinuxSettings {
     localizations: Option<HashMap<String, LinuxDesktopLocale>>,
     startup_wm_class: Option<String>,
     desktop_actions: Option<HashMap<String, DesktopAction>>,
+    // dtb-ke-patches: the Debian `Package:` control field (deb_bundle.rs) is otherwise derived from
+    // `bundle_name()` via `.to_ascii_lowercase()` alone, which is a no-op on non-ASCII characters (an
+    // umlaut survives straight into the control file) — Debian policy restricts package names to
+    // lowercase ASCII letters, digits, `+`, `-`, `.`. This overrides that derivation outright.
+    package_name: Option<String>,
+    // dtb-ke-patches: a shared-mime-info XML file (`<mime-type>`/`<glob>`) copied into
+    // `usr/share/mime/packages/<package name>.xml` in the .deb — see `Settings::linux_mime_info_path`'s
+    // doc comment for why this is needed at all: `mime_types`/the .desktop file's own `MimeType=` line
+    // only *declare* that this app opens the type, they don't register the type (extension → MIME
+    // type mapping) with the system in the first place, and `resources` can't place a file at an
+    // arbitrary path (always under `usr/lib/<binary name>/`).
+    mime_info_path: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, serde::Deserialize)]
@@ -676,6 +688,34 @@ impl Settings {
             .as_ref()
             .and_then(|linux| linux.mime_types.as_deref())
             .unwrap_or_default()
+    }
+
+    /// dtb-ke-patches: the ASCII-safe Debian package name (see `LinuxSettings::package_name`'s doc
+    /// comment). Falls back to the previous derivation — lowercased, spaces to hyphens, otherwise
+    /// unchanged — when unset, so an already-ASCII `bundle_name()` needs no explicit override.
+    pub fn linux_package_name(&self) -> String {
+        match self
+            .bundle_settings
+            .linux
+            .as_ref()
+            .and_then(|linux| linux.package_name.as_deref())
+        {
+            Some(name) => name.to_owned(),
+            None => str::replace(self.bundle_name(), " ", "-").to_ascii_lowercase(),
+        }
+    }
+
+    /// dtb-ke-patches: a shared-mime-info XML file to register in the .deb (see
+    /// `LinuxSettings::mime_info_path`'s doc comment). Required for a custom MIME type
+    /// (`mime_types`/the `.desktop` file's `MimeType=` line) to actually resolve on a real system —
+    /// neither of those *registers* the type (glob → MIME type), they only declare that this app
+    /// opens it once something else has.
+    pub fn linux_mime_info_path(&self) -> Option<&Path> {
+        self.bundle_settings
+            .linux
+            .as_ref()
+            .and_then(|linux| linux.mime_info_path.as_deref())
+            .map(Path::new)
     }
 
     pub fn linux_use_terminal(&self) -> Option<bool> {

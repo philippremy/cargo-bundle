@@ -62,6 +62,8 @@ pub fn bundle_project(settings: &Settings) -> crate::Result<Vec<PathBuf>> {
         .with_context(|| "Failed to copy binary file")?;
     transfer_resource_files(settings, &data_dir)
         .with_context(|| "Failed to copy resource files")?;
+    transfer_mime_info_file(settings, &data_dir)
+        .with_context(|| "Failed to copy shared-mime-info file")?;
     generate_icon_files(settings, &data_dir).with_context(|| "Failed to create icon files")?;
     generate_desktop_file(settings, &data_dir, &DesktopFileOptions::default())
         .with_context(|| "Failed to create desktop file")?;
@@ -101,11 +103,7 @@ fn generate_control_file(
     // https://www.debian.org/doc/debian-policy/ch-controlfields.html
     let dest_path = control_dir.join("control");
     let mut file = common::create_file(&dest_path)?;
-    writeln!(
-        &mut file,
-        "Package: {}",
-        str::replace(settings.bundle_name(), " ", "-").to_ascii_lowercase()
-    )?;
+    writeln!(&mut file, "Package: {}", settings.linux_package_name())?;
     writeln!(&mut file, "Version: {}", settings.version_string())?;
     writeln!(&mut file, "Architecture: {arch}")?;
     // deb Installed-Size is size in bytes / 1024
@@ -185,6 +183,19 @@ fn transfer_resource_files(settings: &Settings, data_dir: &Path) -> crate::Resul
             .with_context(|| format!("Failed to copy resource file {src:?}"))?;
     }
     Ok(())
+}
+
+/// dtb-ke-patches: copies `linux.mime_info_path` (if set) to
+/// `usr/share/mime/packages/<package name>.xml` — see `Settings::linux_mime_info_path`'s doc comment.
+fn transfer_mime_info_file(settings: &Settings, data_dir: &Path) -> crate::Result<()> {
+    let Some(src) = settings.linux_mime_info_path() else {
+        return Ok(());
+    };
+    let dest = data_dir
+        .join("usr/share/mime/packages")
+        .join(format!("{}.xml", settings.linux_package_name()));
+    common::copy_file(src, &dest)
+        .with_context(|| format!("Failed to copy shared-mime-info file {src:?}"))
 }
 
 /// Creates an `ar` archive from the given source files and writes it to the
