@@ -5,38 +5,53 @@ use anyhow::Context;
 use std::path::Path;
 
 /// Sign an Apple bundle or DMG with the pure-Rust `apple-codesign` library.
+///
+/// dtb-ke-patches: signs unconditionally now, not only when `apple_signing_p12` is configured.
+/// `apple_codesign::SigningSettings` already has a real ad-hoc mode (digests only, no cryptographic
+/// signature — exactly `codesign --sign -`) whenever `set_signing_key` is never called; upstream's
+/// early `return Ok(())` when no p12 was set skipped that entirely, which also silently skipped
+/// entitlements/hardened-runtime with it — but those (the App Sandbox, in our case) need to apply on
+/// local/CI dev builds that have no paid Developer ID certificate too, same as our previous ad-hoc
+/// `codesign` invocation always did.
 pub fn sign_apple_path(settings: &Settings, path: &Path) -> crate::Result<()> {
     use apple_codesign::{
         CodeSignatureFlags, SettingsScope, SigningSettings, UnifiedSigner,
         cryptography::{PrivateKey, parse_pfx_data},
     };
 
-    let Some(p12_path) = settings.apple_signing_p12() else {
-        return Ok(());
+    // Loaded into an outer binding (rather than inside the `if let` below) so `private_key` outlives
+    // `signing_settings`'s borrow of it all the way to `sign_path_in_place` at the bottom.
+    let p12_identity = match settings.apple_signing_p12() {
+        Some(p12_path) => {
+            let password = match settings.apple_signing_password_env() {
+                Some(variable) => std::env::var(variable).with_context(|| {
+                    format!(
+                        "Apple signing certificate password environment variable `{variable}` is not set"
+                    )
+                })?,
+                // P12 files exported without a password use the empty string.
+                None => String::new(),
+            };
+            let certificate_data = std::fs::read(p12_path).with_context(|| {
+                format!("Failed to read Apple signing certificate {p12_path:?}")
+            })?;
+            Some(parse_pfx_data(&certificate_data, &password).map_err(|error| {
+                anyhow::anyhow!("Failed to read Apple signing certificate: {error}")
+            })?)
+        }
+        None => None,
     };
-
-    let password = match settings.apple_signing_password_env() {
-        Some(variable) => std::env::var(variable).with_context(|| {
-            format!(
-                "Apple signing certificate password environment variable `{variable}` is not set"
-            )
-        })?,
-        // P12 files exported without a password use the empty string.
-        None => String::new(),
-    };
-    let certificate_data = std::fs::read(p12_path)
-        .with_context(|| format!("Failed to read Apple signing certificate {p12_path:?}"))?;
-    let (certificate, private_key) = parse_pfx_data(&certificate_data, &password)
-        .map_err(|error| anyhow::anyhow!("Failed to read Apple signing certificate: {error}"))?;
 
     let mut signing_settings = SigningSettings::default();
-    signing_settings.set_signing_key(private_key.as_key_info_signer(), certificate);
-    signing_settings.chain_apple_certificates();
-    signing_settings.set_team_id_from_signing_certificate();
-    if let Some(timestamp_url) = settings.apple_signing_timestamp_url() {
-        signing_settings
-            .set_time_stamp_url(timestamp_url)
-            .map_err(|error| anyhow::anyhow!("Invalid Apple signing timestamp URL: {error}"))?;
+    if let Some((certificate, private_key)) = &p12_identity {
+        signing_settings.set_signing_key(private_key.as_key_info_signer(), certificate.clone());
+        signing_settings.chain_apple_certificates();
+        signing_settings.set_team_id_from_signing_certificate();
+        if let Some(timestamp_url) = settings.apple_signing_timestamp_url() {
+            signing_settings
+                .set_time_stamp_url(timestamp_url)
+                .map_err(|error| anyhow::anyhow!("Invalid Apple signing timestamp URL: {error}"))?;
+        }
     }
     if let Some(entitlements_path) = settings.apple_signing_entitlements() {
         let entitlements = std::fs::read_to_string(entitlements_path).with_context(|| {
