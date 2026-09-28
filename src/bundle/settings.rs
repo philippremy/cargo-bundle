@@ -167,6 +167,13 @@ struct OsxSettings {
     info_plist_exts: Option<Vec<String>>,
     localizations: Option<HashMap<String, HashMap<String, String>>>,
     dmg_background: Option<PathBuf>,
+    // dtb-ke-patches: `resources` (the generic top-level field) preserves each source path's full
+    // relative directory structure under `Contents/Resources/`, and the built-in icon handling only
+    // ever copies a single flattened `.icns` (the first one found, at `Resources/<name>.icns`) before
+    // returning. Neither can place a named asset catalog (`Assets.car`) or a document-type icon file
+    // (referenced by bare name from `CFBundleTypeIconFile`/`UTTypeIconFile` via `info_plist_exts`) at
+    // the Resources root by basename. This copies each listed file there directly, no path preserved.
+    additional_resources: Option<Vec<String>>,
 }
 
 #[derive(Clone, Debug, Default, serde::Deserialize)]
@@ -749,6 +756,20 @@ impl Settings {
                 .osx
                 .as_ref()
                 .and_then(|osx| osx.info_plist_exts.as_deref())
+                .unwrap_or_default(),
+            false,
+        )
+    }
+
+    /// dtb-ke-patches: extra files copied directly into `Contents/Resources/` by basename (no
+    /// directory structure preserved) — for an asset catalog (`Assets.car`) or an icon file referenced
+    /// by bare name from an `info_plist_exts` fragment (`CFBundleTypeIconFile`/`UTTypeIconFile`).
+    pub fn osx_additional_resources(&self) -> ResourcePaths<'_> {
+        ResourcePaths::new(
+            self.bundle_settings
+                .osx
+                .as_ref()
+                .and_then(|osx| osx.additional_resources.as_deref())
                 .unwrap_or_default(),
             false,
         )

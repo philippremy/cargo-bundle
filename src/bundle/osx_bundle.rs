@@ -73,6 +73,18 @@ pub fn bundle_project_at(settings: &Settings, output_dir: &Path) -> crate::Resul
             .with_context(|| format!("Failed to copy resource file {src:?}"))?;
     }
 
+    // dtb-ke-patches: unlike the loop above, these land flat at the Resources root (basename only) —
+    // see `Settings::osx_additional_resources`'s doc comment.
+    for src in settings.osx_additional_resources() {
+        let src = src?;
+        let name = src
+            .file_name()
+            .with_context(|| format!("additional resource {src:?} has no file name"))?;
+        let dest = resources_dir.join(name);
+        common::copy_file(&src, &dest)
+            .with_context(|| format!("Failed to copy additional resource {src:?}"))?;
+    }
+
     copy_binary_to_bundle(&bundle_directory, settings)
         .with_context(|| format!("Failed to copy binary from {:?}", settings.binary_path()))?;
 
