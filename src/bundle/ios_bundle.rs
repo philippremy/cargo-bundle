@@ -8,7 +8,7 @@
 // See https://developer.apple.com/go/?id=bundle-structure for a full
 // explanation.
 
-use super::common;
+use super::common::{self, PlistEntryFormatter, read_file};
 use super::signing;
 use crate::Settings;
 use anyhow::Context;
@@ -42,6 +42,21 @@ pub fn bundle_project(settings: &Settings) -> crate::Result<Vec<PathBuf>> {
             .with_context(|| format!("Failed to copy resource file {src:?}"))?;
     }
 
+    // dtb-ke-patches: unlike the loop above, these land flat at the bundle root (basename only) — see
+    // `Settings::ios_additional_resources`'s doc comment. Needed for a pre-compiled `Assets.car` (this
+    // backend's own `generate_icon_files` below only ever produces loose, unmerged `CFBundleIconFiles`
+    // PNGs — no asset-catalog support at all) and any document-type icon files referenced by bare name
+    // from an `ios_info_plist_exts` fragment.
+    for src in settings.ios_additional_resources() {
+        let src = src?;
+        let name = src
+            .file_name()
+            .with_context(|| format!("additional resource {src:?} has no file name"))?;
+        let dest = bundle_dir.join(name);
+        common::copy_file(&src, &dest)
+            .with_context(|| format!("Failed to copy additional resource {src:?}"))?;
+    }
+
     let icon_filenames =
         generate_icon_files(&bundle_dir, settings).with_context(|| "Failed to create app icons")?;
     generate_info_plist(&bundle_dir, settings, &icon_filenames)
@@ -49,7 +64,12 @@ pub fn bundle_project(settings: &Settings) -> crate::Result<Vec<PathBuf>> {
     let bin_path = bundle_dir.join(settings.binary_name());
     common::copy_file(settings.binary_path(), &bin_path)
         .with_context(|| format!("Failed to copy binary from {:?}", settings.binary_path()))?;
-    signing::sign_apple_path(settings, &bundle_dir)?;
+    signing::sign_apple_path(
+        settings,
+        &bundle_dir,
+        settings.ios_signing_entitlements(),
+        settings.ios_signing_hardened_runtime(),
+    )?;
     Ok(vec![bundle_dir])
 }
 
@@ -145,7 +165,10 @@ fn generate_info_plist(
     write!(
         file,
         "  <key>CFBundleDisplayName</key>\n  <string>{}</string>\n",
-        settings.bundle_name()
+        // dtb-ke-patches: was `settings.bundle_name()` — see `Settings::ios_display_name`'s doc
+        // comment (the home-screen label truncates after ~13 characters, so it needs a shorter
+        // override distinct from the full `CFBundleName` right below).
+        settings.ios_display_name()
     )?;
     write!(
         file,
@@ -184,6 +207,13 @@ fn generate_info_plist(
         writeln!(file, "  </array>")?;
     }
     write!(file, "  <key>LSRequiresIPhoneOS</key>\n  <true/>\n")?;
+    // dtb-ke-patches: same splice mechanism as osx_bundle.rs::create_info_plist — see
+    // `Settings::ios_info_plist_exts`'s doc comment.
+    for plist in settings.ios_info_plist_exts() {
+        let plist = plist?;
+        let contents = read_file(&plist)?;
+        write!(file, "{:}", contents.format_plist_entry())?
+    }
     write!(file, "</dict>\n</plist>\n")?;
     file.flush()?;
     Ok(())

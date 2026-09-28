@@ -45,7 +45,12 @@ pub fn bundle_project(settings: &Settings) -> crate::Result<Vec<PathBuf>> {
     )?;
     populate_disk_image(settings, &staging_disk_image_path, &application_bundle_path)?;
     compress_disk_image(&staging_disk_image_path, &final_disk_image_path)?;
-    signing::sign_apple_path(settings, &final_disk_image_path)?;
+    signing::sign_apple_path(
+        settings,
+        &final_disk_image_path,
+        settings.osx_signing_entitlements(),
+        settings.osx_signing_hardened_runtime(),
+    )?;
 
     Ok(vec![final_disk_image_path])
 }

@@ -75,6 +75,20 @@ pub fn read_file(file: &Path) -> crate::Result<String> {
     Ok(contents)
 }
 
+/// dtb-ke-patches: moved here (was private to `osx_bundle.rs`) so `ios_bundle.rs` can splice its own
+/// `info_plist_exts` fragments the same way. Minimal on purpose — spliced fragments sit inside an
+/// already-open `<dict>...</dict>`, unwrapped, so only `&` needs escaping (the fragment's own `<`/`>`
+/// are real markup, not text to escape).
+pub trait PlistEntryFormatter {
+    fn format_plist_entry(&self) -> String;
+}
+
+impl<T: AsRef<str>> PlistEntryFormatter for T {
+    fn format_plist_entry(&self) -> String {
+        self.as_ref().replace("&", "&amp;")
+    }
+}
+
 /// Recursively copies a directory file from one path to another, creating any
 /// parent directories of the destination path as necessary.  Fails if the
 /// source path is not a directory or doesn't exist, or if the destination path

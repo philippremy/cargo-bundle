@@ -98,7 +98,12 @@ pub fn bundle_project_at(settings: &Settings, output_dir: &Path) -> crate::Resul
         add_rpath(&bundle_directory, settings)?;
     }
 
-    signing::sign_apple_path(settings, &app_bundle_path)?;
+    signing::sign_apple_path(
+        settings,
+        &app_bundle_path,
+        settings.osx_signing_entitlements(),
+        settings.osx_signing_hardened_runtime(),
+    )?;
 
     Ok(app_bundle_path)
 }
@@ -150,17 +155,9 @@ fn copy_binary_to_bundle(bundle_directory: &Path, settings: &Settings) -> crate:
         &dest_dir.join(settings.binary_name()),
     )
 }
-trait PlistEntryFormatter {
-    fn format_plist_entry(&self) -> String;
-}
-
-impl<T: AsRef<str>> PlistEntryFormatter for T {
-    fn format_plist_entry(&self) -> String {
-        let input = self.as_ref();
-        input.replace("&", "&amp;")
-        // add other necessary modifications here...
-    }
-}
+// dtb-ke-patches: moved to `common.rs` (as `PlistEntryFormatter`) so `ios_bundle.rs` can splice
+// `ios_info_plist_exts()` fragments the same way this file already splices `osx_info_plist_exts()`.
+use super::common::PlistEntryFormatter;
 
 const FRAMEWORKS_RPATH: &str = "@executable_path/../Frameworks";
 

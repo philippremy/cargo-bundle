@@ -13,7 +13,18 @@ use std::path::Path;
 /// entitlements/hardened-runtime with it — but those (the App Sandbox, in our case) need to apply on
 /// local/CI dev builds that have no paid Developer ID certificate too, same as our previous ad-hoc
 /// `codesign` invocation always did.
-pub fn sign_apple_path(settings: &Settings, path: &Path) -> crate::Result<()> {
+///
+/// dtb-ke-patches: `entitlements`/`hardened_runtime` are now caller-supplied rather than read from
+/// one shared `Settings` getter — this function has no way to tell whether it's signing a macOS or an
+/// iOS bundle, so `osx_bundle.rs`/`dmg_bundle.rs` pass `Settings::osx_signing_*` and `ios_bundle.rs`
+/// passes `Settings::ios_signing_*` (see `OsxSettings::entitlements`'s doc comment for why they must
+/// not share one value).
+pub fn sign_apple_path(
+    settings: &Settings,
+    path: &Path,
+    entitlements: Option<&Path>,
+    hardened_runtime: bool,
+) -> crate::Result<()> {
     use apple_codesign::{
         CodeSignatureFlags, SettingsScope, SigningSettings, UnifiedSigner,
         cryptography::{PrivateKey, parse_pfx_data},
@@ -53,15 +64,15 @@ pub fn sign_apple_path(settings: &Settings, path: &Path) -> crate::Result<()> {
                 .map_err(|error| anyhow::anyhow!("Invalid Apple signing timestamp URL: {error}"))?;
         }
     }
-    if let Some(entitlements_path) = settings.apple_signing_entitlements() {
-        let entitlements = std::fs::read_to_string(entitlements_path).with_context(|| {
+    if let Some(entitlements_path) = entitlements {
+        let entitlements_xml = std::fs::read_to_string(entitlements_path).with_context(|| {
             format!("Failed to read Apple signing entitlements {entitlements_path:?}")
         })?;
         signing_settings
-            .set_entitlements_xml(SettingsScope::Main, entitlements)
+            .set_entitlements_xml(SettingsScope::Main, entitlements_xml)
             .map_err(|error| anyhow::anyhow!("Invalid Apple signing entitlements: {error}"))?;
     }
-    if settings.apple_signing_hardened_runtime() {
+    if hardened_runtime {
         signing_settings.add_code_signature_flags(SettingsScope::Main, CodeSignatureFlags::RUNTIME);
     }
 

@@ -190,6 +190,14 @@ struct OsxSettings {
     // (referenced by bare name from `CFBundleTypeIconFile`/`UTTypeIconFile` via `info_plist_exts`) at
     // the Resources root by basename. This copies each listed file there directly, no path preserved.
     additional_resources: Option<Vec<String>>,
+    // dtb-ke-patches: was `apple_signing_entitlements`/`apple_signing_hardened_runtime`, shared
+    // top-level fields `signing::sign_apple_path` applied to *every* Apple bundle it signed — macOS
+    // and iOS both, with no way to tell them apart. A macOS-only entitlement like
+    // `com.apple.security.app-sandbox` has no iOS meaning at all (iOS's own sandboxing is automatic,
+    // not entitlement-gated) and had been silently riding along into iOS builds. See
+    // `Settings::osx_signing_entitlements`'s doc comment.
+    entitlements: Option<PathBuf>,
+    hardened_runtime: Option<bool>,
 }
 
 /// dtb-ke-patches: `wxsmsi_bundle.rs` (the WiX-based `.msi` backend) had no file-association support
@@ -210,6 +218,23 @@ pub struct WindowsFileAssociation {
 #[serde(deny_unknown_fields)]
 struct WindowsSettings {
     file_association: Option<WindowsFileAssociation>,
+}
+
+/// dtb-ke-patches: `ios_bundle.rs` had none of the capabilities `osx_bundle.rs` has — no
+/// `info_plist_exts` splice, no way to place a file at the bundle root by basename (`resources`
+/// preserves full relative path structure there too, same issue as macOS/Linux), and
+/// `CFBundleDisplayName` was hardcoded to the same value as `CFBundleName`/`name` with no way to give
+/// iOS's home-screen label (truncated after ~13 characters under the icon) a shorter override.
+#[derive(Clone, Debug, Default, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct IosSettings {
+    display_name: Option<String>,
+    info_plist_exts: Option<Vec<String>>,
+    additional_resources: Option<Vec<String>>,
+    // dtb-ke-patches: see `OsxSettings::entitlements`'s doc comment — the iOS-side half of the same
+    // split. Unlike macOS, this app currently ships no iOS entitlements at all (leave both unset).
+    entitlements: Option<PathBuf>,
+    hardened_runtime: Option<bool>,
 }
 
 #[derive(Clone, Debug, Default, serde::Deserialize)]
@@ -242,10 +267,8 @@ struct BundleSettings {
     apple_signing_password_env: Option<String>,
     /// Optional RFC 3161 timestamp service URL for Apple code signatures.
     apple_signing_timestamp_url: Option<String>,
-    /// Optional entitlements plist embedded in Apple code signatures.
-    apple_signing_entitlements: Option<PathBuf>,
-    /// Enable the hardened runtime in Apple code signatures.
-    apple_signing_hardened_runtime: Option<bool>,
+    // dtb-ke-patches: `apple_signing_entitlements`/`apple_signing_hardened_runtime` moved to
+    // `OsxSettings`/`IosSettings` — see `OsxSettings::entitlements`'s doc comment.
     /// Optional Authenticode configuration for `.exe` and `.msi` output.
     windows_signing: Option<WindowsSigningSettings>,
     /// Optional keyless Sigstore configuration for Linux release artifacts.
@@ -253,6 +276,8 @@ struct BundleSettings {
     /// dtb-ke-patches: Windows-only packaging configuration (currently just file association — see
     /// `WindowsFileAssociation`'s doc comment).
     windows: Option<WindowsSettings>,
+    /// dtb-ke-patches: iOS-only packaging configuration — see `IosSettings`'s doc comment.
+    ios: Option<IosSettings>,
     // Bundles for other binaries/examples:
     bin: Option<HashMap<String, BundleSettings>>,
     example: Option<HashMap<String, BundleSettings>>,
@@ -910,15 +935,35 @@ impl Settings {
         self.bundle_settings.apple_signing_timestamp_url.as_deref()
     }
 
-    /// Entitlements plist embedded in Apple code signatures.
-    pub fn apple_signing_entitlements(&self) -> Option<&Path> {
-        self.bundle_settings.apple_signing_entitlements.as_deref()
+    /// dtb-ke-patches: was one shared `apple_signing_entitlements` getter `sign_apple_path` used
+    /// unconditionally for every Apple bundle — see `OsxSettings::entitlements`'s doc comment for why
+    /// that's wrong. Now platform-specific; `sign_apple_path` takes the right one as a parameter (its
+    /// own code has no way to tell which platform it's signing for, so it can't pick by itself).
+    pub fn osx_signing_entitlements(&self) -> Option<&Path> {
+        self.bundle_settings.osx.as_ref()?.entitlements.as_deref()
     }
 
-    /// Whether to enable the hardened runtime during Apple code signing.
-    pub fn apple_signing_hardened_runtime(&self) -> bool {
+    /// Whether to enable the hardened runtime when signing the macOS bundle/DMG.
+    pub fn osx_signing_hardened_runtime(&self) -> bool {
         self.bundle_settings
-            .apple_signing_hardened_runtime
+            .osx
+            .as_ref()
+            .and_then(|osx| osx.hardened_runtime)
+            .unwrap_or(false)
+    }
+
+    /// dtb-ke-patches: the iOS half of `osx_signing_entitlements` — see `OsxSettings::entitlements`'s
+    /// doc comment.
+    pub fn ios_signing_entitlements(&self) -> Option<&Path> {
+        self.bundle_settings.ios.as_ref()?.entitlements.as_deref()
+    }
+
+    /// Whether to enable the hardened runtime when signing the iOS bundle.
+    pub fn ios_signing_hardened_runtime(&self) -> bool {
+        self.bundle_settings
+            .ios
+            .as_ref()
+            .and_then(|ios| ios.hardened_runtime)
             .unwrap_or(false)
     }
 
@@ -932,6 +977,44 @@ impl Settings {
     /// `WindowsFileAssociation`'s doc comment).
     pub fn windows_file_association(&self) -> Option<&WindowsFileAssociation> {
         self.bundle_settings.windows.as_ref()?.file_association.as_ref()
+    }
+
+    /// dtb-ke-patches: iOS's home-screen label override (see `IosSettings`'s doc comment). Falls back
+    /// to `bundle_name()`, same as the previous hardcoded behavior, when unset.
+    pub fn ios_display_name(&self) -> &str {
+        self.bundle_settings
+            .ios
+            .as_ref()
+            .and_then(|ios| ios.display_name.as_deref())
+            .unwrap_or_else(|| self.bundle_name())
+    }
+
+    /// dtb-ke-patches: iOS's own `info_plist_exts` (see `IosSettings`'s doc comment) — a separate list
+    /// from `osx_info_plist_exts()` since the two platforms' Info.plist fragments generally need
+    /// different content (different document-icon file-naming conventions, for one).
+    pub fn ios_info_plist_exts(&self) -> ResourcePaths<'_> {
+        ResourcePaths::new(
+            self.bundle_settings
+                .ios
+                .as_ref()
+                .and_then(|ios| ios.info_plist_exts.as_deref())
+                .unwrap_or_default(),
+            false,
+        )
+    }
+
+    /// dtb-ke-patches: iOS's own `additional_resources` (see `IosSettings`'s doc comment) — files
+    /// placed flat at the bundle root by basename, the same way `osx_additional_resources()` places
+    /// them at the macOS `Contents/Resources/` root.
+    pub fn ios_additional_resources(&self) -> ResourcePaths<'_> {
+        ResourcePaths::new(
+            self.bundle_settings
+                .ios
+                .as_ref()
+                .and_then(|ios| ios.additional_resources.as_deref())
+                .unwrap_or_default(),
+            false,
+        )
     }
 
     pub fn linux_signing(&self) -> Option<&LinuxSigningSettings> {
